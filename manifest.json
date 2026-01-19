@@ -1,0 +1,32 @@
+{
+    "name": "gopeed-extension-quark",
+    "author": "muyan556",
+    "title": "夸克网盘下载",
+    "description": "支持夸克网盘下载,推荐连接数为256",
+    "icon": "icon.png",
+    "version": "1.0.0",
+    "homepage": "https://github.com/muyan556/gopeed-extension-quark",
+    "repository": {
+        "url": "https://github.com/muyan556/gopeed-extension-quark"
+    },
+    "scripts": [
+        {
+            "event": "onResolve",
+            "match": {
+                "urls": [
+                    "*://pan.quark.cn/s/*"
+                ]
+            },
+            "entry": "index.js"
+        }
+    ],
+    "settings": [
+        {
+            "name": "cookie",
+            "title": "夸克 Cookie",
+            "description": "从浏览器开发者工具中复制完整的 Cookie 字符串（登录 pan.quark.cn 后在 F12 → Application → Cookies 中获取）",
+            "type": "string",
+            "value": ""
+        }
+    ]
+}
