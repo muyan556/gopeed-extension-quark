@@ -73,8 +73,6 @@ Gopeed 扩展，用于解析夸克网盘分享链接并下载文件。
 
 - 标准分享链接: `https://pan.quark.cn/s/xxxxxxxxx`
 - 带密码的分享: `https://pan.quark.cn/s/xxxxxxxxx?pwd=1234`
-- 包含干扰字符的链接: `[广告]https://pan.quark.cn/s/xxxxxxxxx[推广]`
-- 纯分享 ID: `xxxxxxxxx`
 
 ## 常见问题
 
@@ -131,3 +129,4 @@ MIT License
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
