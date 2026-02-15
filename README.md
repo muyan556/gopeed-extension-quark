@@ -4,11 +4,11 @@ Gopeed 扩展，用于解析夸克网盘分享链接并下载文件。
 
 ## 安装
 
-### 方法 1: 通过 Gopeed 扩展商店安装
+### 方法 1: 通过 Gopeed 扩展商店安装（如果已发布）
 
 1. 打开 Gopeed
 2. 进入「扩展」页面
-3. 输入仓库地址(`https://github.com/muyan556/gopeed-extension-quark`)
+3. 搜索「夸克网盘」或输入仓库地址(`https://github.com/muyan556/gopeed-extension-quark`)
 4. 点击安装
 
 ### 方法 2: 本地安装
@@ -28,21 +28,29 @@ Gopeed 扩展，用于解析夸克网盘分享链接并下载文件。
 
 ## 配置
 
-扩展需要你的夸克账号 Cookie 才能工作。
-获取 Cookie：
+扩展需要你的夸克账号 Cookie 才能工作。我们提供了一种方式获取 Cookie：
 
 ### 方法 1：手动获取 Cookie
 
 1. 使用浏览器（Chrome/Edge/Firefox）访问 [https://pan.quark.cn/](https://pan.quark.cn/)
 2. 登录你的夸克账号
 3. 按 `F12` 打开开发者工具
-4. 切换到 `Network`（Chrome/Edge）或 `网络`（Firefox）标签页
-5. 在左侧找到 `list` → `https://pan.quark.cn`
-6. 复制请求中 Cookie 字段
+4. 切换到 `Application`（Chrome/Edge）或 `存储`（Firefox）标签页
+5. 在左侧找到 `Cookies` → `https://pan.quark.cn`
+6. 复制所有 Cookie（建议复制完整的 Cookie 字符串，格式类似：`key1=value1; key2=value2; ...`）
 7. 打开 Gopeed 的扩展设置
 8. 找到本扩展，点击设置
 9. 将复制的 Cookie 粘贴到「夸克 Cookie」设置项中
 10. 保存设置
+
+### Cookie 获取详细说明
+
+在开发者工具的 Cookies 页面，你会看到多个 Cookie 项，需要的主要 Cookie 包括但不限于：
+- `__puus`
+- `__pus`
+- 其他认证相关的 Cookie
+
+**建议**：直接复制整个页面显示的所有 Cookie，格式化为 `key1=value1; key2=value2` 的形式。
 
 ## 使用方法
 
@@ -120,5 +128,3 @@ MIT License
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
-
-

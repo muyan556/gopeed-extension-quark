@@ -1,18 +1,17 @@
 /**
  * Gopeed 夸克网盘解析扩展
- * 支持解析夸克分享链接，包括密码保护的分享和文件夹
- * @version 1.0.0
+ * @version 1.0.1
  * @author muyan556
  */
 
-// ================= 配置常量 =================
+// 配置常量
 const USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch";
 const API_BASE_URL = "https://pan.quark.cn";
 const DRIVE_BASE_URL = "https://drive-pc.quark.cn";
 const MAX_RETRY = 3;
 const RETRY_DELAY = 1000;
 
-// ================= 工具函数 =================
+// 工具函数
 
 /**
  * 延迟函数
@@ -23,9 +22,9 @@ function sleep(ms) {
 }
 
 /**
- * 从分享链接中解析出 pwdId 和 passcode
+ * 从分享链接中解析出 pwdId、passcode 和 pdirFid
  * @param {string} url - 分享链接
- * @returns {{pwdId: string, passcode: string}}
+ * @returns {{pwdId: string, passcode: string, pdirFid: string}}
  */
 function parseShareUrl(url) {
     if (!url || typeof url !== 'string') {
@@ -36,6 +35,7 @@ function parseShareUrl(url) {
     const clean = url.replace(/\[.*?\]/g, '').trim();
     let pwdId = '';
     let passcode = '';
+    let pdirFid = '';
 
     // 提取 pwdId
     const idMatch = clean.match(/\/s\/([a-zA-Z0-9]+)/);
@@ -51,11 +51,17 @@ function parseShareUrl(url) {
         passcode = pwMatch[2];
     }
 
+    // 提取子文件夹 ID（从 #/list/share/<fid> 格式中）
+    const dirMatch = clean.match(/#\/list\/share\/([a-zA-Z0-9]+)/);
+    if (dirMatch && dirMatch[1]) {
+        pdirFid = dirMatch[1];
+    }
+
     if (!pwdId) {
         throw new Error('无法从链接中解析出分享 ID，请检查链接格式');
     }
 
-    return { pwdId, passcode };
+    return { pwdId, passcode, pdirFid };
 }
 
 /**
@@ -206,7 +212,7 @@ async function apiPollTask(taskId) {
 
         if (res.data && res.data.status === 2) {
             gopeed.logger.info('转存任务完成');
-            return res.data.save_as?.save_as_top_fids || [];
+            return (res.data.save_as && res.data.save_as.save_as_top_fids) || [];
         } else if (res.data && res.data.status === 3) {
             throw new Error('转存任务失败，请检查网盘空间或文件权限');
         }
@@ -242,6 +248,66 @@ async function apiGetDownloadLink(fids) {
 }
 
 /**
+ * 删除网盘中的文件（转存后删除，释放空间）
+ * 下载链接在获取后有独立的过期时间，删除文件不影响已获取的下载链接
+ * @param {Array} fids - 要删除的文件 ID 列表
+ * @returns {Promise<object>}
+ */
+async function apiDeleteFile(fids) {
+    const url = 'https://drive.quark.cn/1/clouddrive/file/delete?pr=ucpro&fr=pc&uc_param_str=';
+    const data = {
+        action_type: 2,
+        filelist: fids,
+        exclude_fids: []
+    };
+
+    try {
+        const res = await requestApi(url, 'POST', data);
+
+        if (res.code !== 0) {
+            gopeed.logger.warn(`删除文件失败（错误码: ${res.code}）: ${res.message || '未知错误'}，不影响下载`);
+            return res;
+        }
+
+        gopeed.logger.info(`成功删除 ${fids.length} 个文件，已释放网盘空间`);
+        return res;
+    } catch (error) {
+        // 删除失败不应影响下载流程，仅打印警告
+        gopeed.logger.warn(`删除文件时出错: ${error.message}，不影响下载`);
+        return null;
+    }
+}
+
+/**
+ * 获取网盘可用空间
+ * @returns {Promise<number>} 可用空间（字节），获取失败返回 -1
+ */
+async function apiGetCapacity() {
+    const url = 'https://drive.quark.cn/1/clouddrive/member?pr=ucpro&fr=pc&uc_param_str&fetch_subscribe=true&_ch=home&fetch_identity=true';
+
+    try {
+        const res = await requestApi(url, 'GET');
+
+        if (res.code !== 0) {
+            gopeed.logger.warn(`获取容量信息失败（错误码: ${res.code}）: ${res.message || '未知错误'}`);
+            return -1;
+        }
+
+        const rangeSize = res.metadata && res.metadata.range_size;
+        if (rangeSize !== undefined && rangeSize !== null) {
+            gopeed.logger.info(`网盘可用空间: ${(rangeSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
+            return rangeSize;
+        }
+
+        gopeed.logger.warn('容量信息中未找到 range_size 字段');
+        return -1;
+    } catch (error) {
+        gopeed.logger.warn(`获取容量失败: ${error.message}，将使用默认模式`);
+        return -1;
+    }
+}
+
+/**
  * 递归获取文件夹下的所有文件
  * @param {string} pwdId - 分享 ID
  * @param {string} stoken - 分享 Token
@@ -266,10 +332,9 @@ async function getAllFiles(pwdId, stoken, pdirFid = '', parentPath = '') {
         } else {
             // 如果是文件，添加到列表
             gopeed.logger.debug(`找到文件: ${currentPath} (${(item.size / 1024 / 1024).toFixed(2)} MB)`);
-            allFiles.push({
-                ...item,
+            allFiles.push(Object.assign({}, item, {
                 path: parentPath
-            });
+            }));
         }
     }
 
@@ -277,8 +342,72 @@ async function getAllFiles(pwdId, stoken, pdirFid = '', parentPath = '') {
 }
 
 /**
+ * 逐文件处理：转存 → 获取下载链接 → 删除（最小化空间占用）
+ */
+async function processFilesOneByOne(pwdId, stoken, allFiles) {
+    const results = [];
+    const shouldDelete = String(gopeed.settings.delete_file) === '1';
+
+    for (let i = 0; i < allFiles.length; i++) {
+        const file = allFiles[i];
+        const progress = `[${i + 1}/${allFiles.length}]`;
+
+        try {
+            gopeed.logger.info(`${progress} 转存: ${file.file_name}`);
+
+            // 1. 转存单个文件
+            const taskId = await apiSaveFile(pwdId, stoken, [file.fid], [file.share_fid_token || file.fid_token]);
+
+            if (!taskId) {
+                gopeed.logger.warn(`${progress} 转存任务创建失败，跳过`);
+                continue;
+            }
+
+            // 2. 等待转存完成
+            const savedFids = await apiPollTask(taskId);
+
+            if (savedFids.length === 0) {
+                gopeed.logger.warn(`${progress} 转存结果为空，跳过`);
+                continue;
+            }
+
+            // 3. 获取下载链接
+            const downloadData = await apiGetDownloadLink(savedFids);
+
+            if (downloadData.length === 0) {
+                gopeed.logger.warn(`${progress} 获取下载链接失败，跳过`);
+                if (shouldDelete) await apiDeleteFile(savedFids);
+                continue;
+            }
+
+            // 4. 立即删除，释放空间给下一个文件
+            if (shouldDelete) {
+                await apiDeleteFile(savedFids);
+            }
+
+            // 5. 记录结果
+            results.push({
+                file_name: downloadData[0].file_name,
+                download_url: downloadData[0].download_url,
+                size: downloadData[0].size,
+                path: file.path || ''
+            });
+
+            gopeed.logger.info(`${progress} 完成: ${file.file_name}`);
+
+        } catch (error) {
+            gopeed.logger.warn(`${progress} 处理失败: ${error.message}，跳过继续`);
+        }
+    }
+
+    return results;
+}
+
+/**
  * 主解析函数
- * Gopeed 调用此函数解析夸克网盘分享链接
+ * 支持两种转存模式（通过 save_mode 设置切换）：
+ * 模式1（批量）: 一次性转存所有文件，速度快但需要足够空间
+ * 模式2（逐个）: 逐文件转存+取链接+删除，省空间但较慢
  */
 gopeed.events.onResolve(async (ctx) => {
     const startTime = Date.now();
@@ -293,20 +422,19 @@ gopeed.events.onResolve(async (ctx) => {
         }
 
         // 解析 URL
-        const { pwdId, passcode } = parseShareUrl(ctx.req.url);
-
-        gopeed.logger.info(`解析结果 - pwdId: ${pwdId}, 密码: ${passcode || '无'}`);
+        const { pwdId, passcode, pdirFid } = parseShareUrl(ctx.req.url);
+        gopeed.logger.info(`解析结果 - pwdId: ${pwdId}, 密码: ${passcode || '无'}, 子目录: ${pdirFid || '根目录'}`);
 
         // 获取 Token
-        gopeed.logger.info('Step 1/5: 获取分享 Token...');
+        gopeed.logger.info('Step 1: 获取分享 Token...');
         const tokenData = await apiGetToken(pwdId, passcode);
         const stoken = tokenData.stoken;
         const shareTitle = tokenData.title || '夸克分享';
         gopeed.logger.info(`Token 获取成功: ${shareTitle}`);
 
         // 递归获取所有文件
-        gopeed.logger.info('Step 2/5: 扫描文件列表...');
-        const allFiles = await getAllFiles(pwdId, stoken);
+        gopeed.logger.info('Step 2: 扫描文件列表...');
+        const allFiles = await getAllFiles(pwdId, stoken, pdirFid);
 
         if (allFiles.length === 0) {
             throw new Error('分享中没有文件');
@@ -315,46 +443,46 @@ gopeed.events.onResolve(async (ctx) => {
         const totalSize = allFiles.reduce((sum, f) => sum + (f.size || 0), 0);
         gopeed.logger.info(`找到 ${allFiles.length} 个文件，总大小: ${(totalSize / 1024 / 1024 / 1024).toFixed(2)} GB`);
 
-        // 准备转存参数
-        const fidList = allFiles.map(f => f.fid);
-        const fidTokenList = allFiles.map(f => f.share_fid_token || f.fid_token);
+        // 智能选择转存模式
+        const saveMode = String(gopeed.settings.save_mode);
+        let downloadData;
+        let useBatch = (saveMode !== '2'); // 默认模式1用批量
 
-        // 转存文件
-        gopeed.logger.info('Step 3/5: 转存文件到网盘...');
-        const taskId = await apiSaveFile(pwdId, stoken, fidList, fidTokenList);
+        if (useBatch) {
+            // 检查可用空间，决定是否能批量转存
+            gopeed.logger.info('Step 3: 检查网盘可用空间...');
+            const availableSpace = await apiGetCapacity();
 
-        if (!taskId) {
-            throw new Error('转存任务创建失败');
+            if (availableSpace >= 0) {
+                if (totalSize > availableSpace) {
+                    gopeed.logger.info(`空间不足（需要 ${(totalSize / 1024 / 1024 / 1024).toFixed(2)} GB，可用 ${(availableSpace / 1024 / 1024 / 1024).toFixed(2)} GB），自动切换为逐个转存模式`);
+                    useBatch = false;
+                } else {
+                    gopeed.logger.info(`空间充足，使用批量转存模式`);
+                }
+            } else {
+                gopeed.logger.info('无法获取容量信息，使用批量模式（默认）');
+            }
         }
 
-        gopeed.logger.info(`Step 4/5: 转存任务创建成功 (${taskId})，等待完成...`);
+        if (!useBatch) {
+            // ============ 模式2: 逐个转存 ============
+            gopeed.logger.info('Step 3: 逐个文件转存（省空间模式）...');
+            const results = await processFilesOneByOne(pwdId, stoken, allFiles);
 
-        // 等待转存完成
-        const savedFids = await apiPollTask(taskId);
+            if (results.length === 0) {
+                throw new Error('所有文件处理失败，请检查网盘空间是否充足或 Cookie 是否有效');
+            }
 
-        if (savedFids.length === 0) {
-            throw new Error('转存完成但结果为空');
-        }
+            gopeed.logger.info(`成功获取 ${results.length}/${allFiles.length} 个下载链接`);
 
-        // 获取下载链接
-        gopeed.logger.info('Step 5/5: 获取下载链接...');
-        const downloadData = await apiGetDownloadLink(savedFids);
-
-        if (downloadData.length === 0) {
-            throw new Error('获取下载链接失败，请稍后重试');
-        }
-
-        gopeed.logger.info(`成功获取 ${downloadData.length} 个下载链接`);
-
-        // 构建返回结果
-        ctx.res = {
-            name: shareTitle,
-            files: downloadData.map((item, index) => {
-                const originalFile = allFiles[index] || {};
-                return {
+            // 构建返回结果
+            ctx.res = {
+                name: shareTitle,
+                files: results.map(item => ({
                     name: item.file_name,
                     size: item.size,
-                    path: originalFile.path || '',
+                    path: item.path,
                     req: {
                         url: item.download_url,
                         extra: {
@@ -364,15 +492,71 @@ gopeed.events.onResolve(async (ctx) => {
                             }
                         }
                     }
-                };
-            })
-        };
+                }))
+            };
+
+        } else {
+            // ============ 批量转存 ============
+            const fidList = allFiles.map(f => f.fid);
+            const fidTokenList = allFiles.map(f => f.share_fid_token || f.fid_token);
+
+            gopeed.logger.info('Step 4: 批量转存文件到网盘...');
+            const taskId = await apiSaveFile(pwdId, stoken, fidList, fidTokenList);
+
+            if (!taskId) {
+                throw new Error('转存任务创建失败');
+            }
+
+            gopeed.logger.info(`Step 4: 转存任务创建成功 (${taskId})，等待完成...`);
+            const savedFids = await apiPollTask(taskId);
+
+            if (savedFids.length === 0) {
+                throw new Error('转存完成但结果为空');
+            }
+
+            gopeed.logger.info('Step 5: 获取下载链接...');
+            downloadData = await apiGetDownloadLink(savedFids);
+
+            if (downloadData.length === 0) {
+                throw new Error('获取下载链接失败，请稍后重试');
+            }
+
+            gopeed.logger.info(`成功获取 ${downloadData.length} 个下载链接`);
+
+            // 根据设置决定是否删除
+            if (String(gopeed.settings.delete_file) === '1') {
+                gopeed.logger.info('Step 6: 删除转存文件，释放空间...');
+                await apiDeleteFile(savedFids);
+            }
+
+            // 构建返回结果
+            ctx.res = {
+                name: shareTitle,
+                files: downloadData.map((item, index) => {
+                    const originalFile = allFiles[index] || {};
+                    return {
+                        name: item.file_name,
+                        size: item.size,
+                        path: originalFile.path || '',
+                        req: {
+                            url: item.download_url,
+                            extra: {
+                                header: {
+                                    'User-Agent': USER_AGENT,
+                                    'Cookie': gopeed.settings.cookie
+                                }
+                            }
+                        }
+                    };
+                })
+            };
+        }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         gopeed.logger.info(`========== 解析完成！耗时: ${elapsed}秒 ==========`);
 
     } catch (error) {
         gopeed.logger.error(`========== 解析失败: ${error.message} ==========`);
-        throw error;
+        throw new MessageError(error.message);
     }
 });
