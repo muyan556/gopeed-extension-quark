@@ -1,6 +1,6 @@
 /**
  * Gopeed 夸克网盘解析扩展
- * @version 1.0.1
+ * @version 1.0.2
  * @author muyan556
  */
 
@@ -197,32 +197,34 @@ async function apiSaveFile(pwdId, stoken, fidList, fidTokenList) {
 }
 
 /**
- * 轮询转存任务状态
+ * 轮询转存任务状态（无超时限制，等待直到完成）
  * @param {string} taskId - 任务 ID
  * @returns {Promise<Array>}
  */
 async function apiPollTask(taskId) {
-    const MAX_POLLS = 30;
+    const pollStart = Date.now();
+    let pollCount = 0;
 
-    for (let i = 0; i < MAX_POLLS; i++) {
+    while (true) {
         await sleep(1000);
+        pollCount++;
 
         const url = `${DRIVE_BASE_URL}/1/clouddrive/task?pr=ucpro&fr=pc&uc_param_str=&task_id=${taskId}&retry_index=0&__dt=${Date.now()}`;
         const res = await requestApi(url, 'GET');
 
         if (res.data && res.data.status === 2) {
-            gopeed.logger.info('转存任务完成');
+            const elapsed = ((Date.now() - pollStart) / 1000).toFixed(1);
+            gopeed.logger.info(`转存完成（耗时 ${elapsed}秒）`);
             return (res.data.save_as && res.data.save_as.save_as_top_fids) || [];
         } else if (res.data && res.data.status === 3) {
             throw new Error('转存任务失败，请检查网盘空间或文件权限');
         }
 
-        if ((i + 1) % 5 === 0) {
-            gopeed.logger.debug(`轮询中... (${i + 1}/${MAX_POLLS})`);
+        if (pollCount % 5 === 0) {
+            const elapsed = ((Date.now() - pollStart) / 1000).toFixed(0);
+            gopeed.logger.info(`转存中... 已等待 ${elapsed}秒`);
         }
     }
-
-    throw new Error('转存任务超时（30秒），请稍后重试');
 }
 
 /**
@@ -413,7 +415,7 @@ gopeed.events.onResolve(async (ctx) => {
     const startTime = Date.now();
 
     try {
-        gopeed.logger.info(`========== 开始解析夸克分享 ==========`);
+        gopeed.logger.info(`开始解析夸克分享`);
         gopeed.logger.info(`URL: ${ctx.req.url}`);
 
         // 检查 Cookie 配置
@@ -466,8 +468,8 @@ gopeed.events.onResolve(async (ctx) => {
         }
 
         if (!useBatch) {
-            // ============ 模式2: 逐个转存 ============
-            gopeed.logger.info('Step 3: 逐个文件转存（省空间模式）...');
+            // ============ 逐个转存 ============
+            gopeed.logger.info(`[${saveMode === '2' ? '强制逐个模式' : '智能模式-空间不足'}] 开始逐个转存 ${allFiles.length} 个文件...`);
             const results = await processFilesOneByOne(pwdId, stoken, allFiles);
 
             if (results.length === 0) {
@@ -500,7 +502,7 @@ gopeed.events.onResolve(async (ctx) => {
             const fidList = allFiles.map(f => f.fid);
             const fidTokenList = allFiles.map(f => f.share_fid_token || f.fid_token);
 
-            gopeed.logger.info('Step 4: 批量转存文件到网盘...');
+            gopeed.logger.info(`[智能模式-批量] 批量转存 ${allFiles.length} 个文件到网盘...`);
             const taskId = await apiSaveFile(pwdId, stoken, fidList, fidTokenList);
 
             if (!taskId) {
@@ -521,7 +523,7 @@ gopeed.events.onResolve(async (ctx) => {
                 throw new Error('获取下载链接失败，请稍后重试');
             }
 
-            gopeed.logger.info(`成功获取 ${downloadData.length} 个下载链接`);
+            gopeed.logger.info(`[智能模式-批量] 已批量转存 ${downloadData.length} 个文件，成功获取下载链接`);
 
             // 根据设置决定是否删除
             if (String(gopeed.settings.delete_file) === '1') {
@@ -553,10 +555,10 @@ gopeed.events.onResolve(async (ctx) => {
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-        gopeed.logger.info(`========== 解析完成！耗时: ${elapsed}秒 ==========`);
+        gopeed.logger.info(`解析完成，耗时 ${elapsed}秒`);
 
     } catch (error) {
-        gopeed.logger.error(`========== 解析失败: ${error.message} ==========`);
+        gopeed.logger.error(`解析失败: ${error.message}`);
         throw new MessageError(error.message);
     }
 });
