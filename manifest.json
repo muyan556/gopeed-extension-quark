@@ -4,7 +4,7 @@
     "title": "夸克网盘下载",
     "description": "支持夸克网盘下载,推荐连接数为256",
     "icon": "icon.png",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "homepage": "https://github.com/muyan556/gopeed-extension-quark",
     "repository": {
         "url": "https://github.com/muyan556/gopeed-extension-quark"
@@ -31,16 +31,16 @@
         {
             "name": "save_mode",
             "title": "转存模式",
-            "description": "智能批量：优先批量转存，空间不足自动切逐个；强制逐个：每次只转存1个文件，适合空间极度紧张",
+            "description": "智能批量：优先批量转存，空间不足自动切逐个转存；强制逐个：每次只转存1个文件，适合总空间10GB，解析速度较慢 ",
             "type": "number",
             "value": "1",
             "options": [
                 {
-                    "label": "智能批量（空间不足自动切逐个）",
+                    "label": "智能批量",
                     "value": "1"
                 },
                 {
-                    "label": "强制逐个转存",
+                    "label": "逐个转存",
                     "value": "2"
                 }
             ]
