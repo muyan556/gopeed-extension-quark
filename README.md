@@ -5,7 +5,7 @@ Gopeed 扩展，用于解析夸克网盘分享链接并下载文件。
 ## 项目结构
 
 ```
-quark-sdk/
+gopeed-extension-quark/
 ├── index.js          # 源码
 ├── dist/
 │   └── index.js      # 打包后的文件
