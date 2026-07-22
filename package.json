@@ -1,6 +1,6 @@
 {
   "name": "gopeed-extension-quark",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "scripts": {
     "dev": "webpack --mode development --watch",

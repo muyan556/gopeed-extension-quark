@@ -176,7 +176,13 @@ async function apiSaveFile(pwdId, stoken, fidList, fidTokenList) {
         to_pdir_fid: "0", pwd_id: pwdId, stoken, pdir_fid: "0", scene: "link"
     });
     if (res.code !== 0) throw new Error(`转存失败 (代码:${res.code}): ${res.message}`);
-    return res.data?.task_id;
+    
+    // 如果 API 同步返回了转存结果，直接取出 savedFids
+    const syncFids = res.data?.task_resp?.data?.save_as?.save_as_top_fids;
+    if (res.data?.task_sync && Array.isArray(syncFids) && syncFids.length > 0) {
+        return { taskId: res.data.task_id, savedFids: syncFids };
+    }
+    return { taskId: res.data?.task_id };
 }
 
 async function apiPollTask(taskId, fileCount = 1) {
@@ -194,18 +200,34 @@ async function apiPollTask(taskId, fileCount = 1) {
         const url = `${DRIVE_BASE_URL}/1/clouddrive/task?pr=ucpro&fr=pc&task_id=${taskId}&__dt=${Date.now()}`;
         const res = await requestApi(url, 'GET');
 
-        if (res.data?.status === 2) return res.data.save_as?.save_as_top_fids || [];
+        if (res.data?.status === 2 || res.data?.status === 1) {
+            const fids = res.data.save_as?.save_as_top_fids || res.data.save_as?.save_as_select_top_fids;
+            if (Array.isArray(fids) && fids.length > 0) {
+                return fids;
+            }
+            if (res.data?.status === 2) return [];
+        }
         if (res.data?.status === 3) throw new Error(`转存失败，云端空间满或风控触发`);
     }
     throw new Error(`转存超时`);
 }
 
 async function apiGetDownloadLink(fids) {
-    const url = `${DRIVE_BASE_URL}/1/clouddrive/file/download?pr=ucpro&fr=pc`;
-    const res = await requestApi(url, 'POST', { fids });
-    if (res.code === 23018) throw new Error('触发夸克限制(23018)，账号可能被风控');
-    if (res.code !== 0) throw new Error(`获取直链失败: ${res.message}`);
-    return res.data || [];
+    if (!fids || fids.length === 0) return [];
+    const BATCH_SIZE = 50;
+    let allLinks = [];
+
+    for (let i = 0; i < fids.length; i += BATCH_SIZE) {
+        const chunk = fids.slice(i, i + BATCH_SIZE);
+        const url = `${DRIVE_BASE_URL}/1/clouddrive/file/download?pr=ucpro&fr=pc`;
+        const res = await requestApi(url, 'POST', { fids: chunk });
+        if (res.code === 23018) throw new Error('触发夸克限制(23018)，账号可能被风控');
+        if (res.code !== 0) throw new Error(`获取直链失败: ${res.message}`);
+        if (Array.isArray(res.data)) {
+            allLinks = allLinks.concat(res.data);
+        }
+    }
+    return allLinks;
 }
 
 async function apiDeleteFile(fids) {
@@ -308,8 +330,10 @@ async function processSmartChunks(pwdId, stoken, allFiles, availableSpace, shoul
         const tokens = chunk.map(f => f.share_fid_token || f.fid_token);
 
         try {
-            const taskId = await apiSaveFile(pwdId, stoken, fids, tokens);
-            const savedFids = await apiPollTask(taskId, chunk.length);
+            const saveRes = await apiSaveFile(pwdId, stoken, fids, tokens);
+            const savedFids = (saveRes.savedFids && saveRes.savedFids.length > 0)
+                ? saveRes.savedFids
+                : await apiPollTask(saveRes.taskId, chunk.length);
 
             if (savedFids.length > 0) {
                 const downloadData = await apiGetDownloadLink(savedFids);
@@ -355,10 +379,14 @@ gopeed.events.onResolve(async (ctx) => {
     try {
         gopeed.logger.info("=== 夸克网盘解析开始 ===");
 
-        const settingsCookie = gopeed.settings.cookie;
+        const settingsCookie = (gopeed.settings.cookie || '').trim();
         if (!settingsCookie) throw new Error('未配置 Cookie，请在扩展设置中填入');
-        if (!gopeed.storage.get('quark_cookie')) {
+        
+        const lastSettingsCookie = gopeed.storage.get('last_settings_cookie');
+        if (!gopeed.storage.get('quark_cookie') || settingsCookie !== lastSettingsCookie) {
             gopeed.storage.set('quark_cookie', settingsCookie);
+            gopeed.storage.set('last_settings_cookie', settingsCookie);
+            gopeed.logger.debug("已同步最新 Cookie 到扩展存储");
         }
 
         const { pwdId, passcode, pdirFid } = parseShareUrl(ctx.req.url);
@@ -392,7 +420,12 @@ gopeed.events.onResolve(async (ctx) => {
         gopeed.logger.info("4. 开始轮转提取下载直链...");
         const { finalParsedFiles, skippedCount } = await processSmartChunks(pwdId, tokenData.stoken, allFiles, availableSpace, shouldDelete);
 
-        if (finalParsedFiles.length === 0) throw new Error('提取失败，转存任务未生成有效直链');
+        if (finalParsedFiles.length === 0) {
+            throw new Error(`提取失败，转存任务未生成有效直链。可能原因：网盘空间不足、分享链接已失效、或 API 调用失败。请检查：
+- 分享链接是否还能正常查看文件
+- Cookie 是否完整有效（建议重新在浏览器复制）
+- 文件大小是否超过当前网盘可用空间（扩展会自动跳过超大文件）`);
+        }
         gopeed.logger.info(`=== 解析成功! 本次有效获取: ${finalParsedFiles.length}/${allFiles.length} 个文件直链 ===`);
 
         let finalTitle = shareTitle;
@@ -416,7 +449,8 @@ gopeed.events.onResolve(async (ctx) => {
                     extra: {
                         header: {
                             'User-Agent': USER_AGENT,
-                            'Cookie': getCookie()
+                            'Cookie': getCookie(),
+                            'Referer': 'https://pan.quark.cn/'
                         }
                     }
                 }
