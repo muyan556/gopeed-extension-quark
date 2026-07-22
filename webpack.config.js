@@ -2,7 +2,7 @@ const path = require('path');
 const GopeedPolyfillWebpackPlugin = require('gopeed-polyfill-webpack-plugin');
 
 module.exports = {
-  entry: './index.js',
+  entry: './src/index.js',
   output: {
     filename: 'index.js',
     path: path.resolve(__dirname, 'dist'),
